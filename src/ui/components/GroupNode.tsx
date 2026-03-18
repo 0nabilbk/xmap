@@ -24,7 +24,6 @@ function GroupNode({ data }: { data: GroupNodeData }) {
           fontSize: 11,
           fontWeight: 700,
           color: '#fff',
-          opacity: 1,
           textTransform: 'uppercase',
           letterSpacing: '0.05em',
         }}

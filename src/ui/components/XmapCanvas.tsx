@@ -110,29 +110,20 @@ function XmapCanvasInner({ state, onStateChange, onRediscover }: XmapCanvasProps
     return () => clearTimeout(timer);
   }, [activeWorkflowId, reactFlow]);
 
-  // Param change handler — updates paramValues in state
   const handleParamChange = useCallback((screenId: string, param: string, value: string) => {
     const s = stateRef.current;
     const existing = s.paramValues[screenId] ?? {};
-    const updated = { ...existing, [param]: value };
     onStateChange({
       ...s,
-      paramValues: { ...s.paramValues, [screenId]: updated },
+      paramValues: { ...s.paramValues, [screenId]: { ...existing, [param]: value } },
     });
   }, [onStateChange]);
 
   const graph = useMemo(() => {
     return buildGraph(
-      state.screens,
-      state.sections,
-      state.edges,
-      hiddenIds,
-      handleHide,
-      state.iframe,
-      state.appUrl,
-      state.paramValues,
-      handleParamChange,
-      activeWorkflow
+      state.screens, state.sections, state.edges,
+      hiddenIds, handleHide, state.iframe, state.appUrl,
+      state.paramValues, handleParamChange, activeWorkflow
     );
   }, [state, hiddenIds, handleHide, handleParamChange, activeWorkflow]);
 
@@ -149,31 +140,21 @@ function XmapCanvasInner({ state, onStateChange, onRediscover }: XmapCanvasProps
   }, []);
 
   const onConnect = useCallback((connection: Connection) => {
-    // Prompt for edge label
     const label = window.prompt('Edge label (optional):') ?? undefined;
-
     setEdges((eds) => addEdge({
-      ...connection,
-      label,
-      type: 'smoothstep',
+      ...connection, label, type: 'smoothstep',
       style: { stroke: '#d4d4d4', strokeWidth: 1.5 },
       labelStyle: { fontSize: 10, fill: '#a3a3a3', fontWeight: 500 },
       markerEnd: { type: 'arrowclosed' as any, color: '#d4d4d4', width: 14, height: 14 },
     }, eds));
-
     if (connection.source && connection.target) {
-      const newEdge = { source: connection.source, target: connection.target, label };
       const s = stateRef.current;
-      const exists = s.edges.some(
-        (e) => e.source === newEdge.source && e.target === newEdge.target
-      );
-      if (!exists) {
-        onStateChange({ ...s, edges: [...s.edges, newEdge] });
+      if (!s.edges.some((e) => e.source === connection.source && e.target === connection.target)) {
+        onStateChange({ ...s, edges: [...s.edges, { source: connection.source, target: connection.target, label }] });
       }
     }
   }, [onStateChange, setEdges]);
 
-  // Sync hidden state back to MapState
   useEffect(() => {
     const arr = [...hiddenIds];
     const current = [...stateRef.current.hiddenScreens].sort();
@@ -187,8 +168,8 @@ function XmapCanvasInner({ state, onStateChange, onRediscover }: XmapCanvasProps
   [state.screens]);
 
   return (
-    <div className="h-screen w-screen flex bg-[#f5f5f5] overflow-hidden">
-      <div className="flex-shrink-0">
+    <div style={{ height: '100vh', width: '100vw', display: 'flex', background: '#f5f5f5', overflow: 'hidden' }}>
+      <div style={{ flexShrink: 0 }}>
         <XmapSidebar
           sections={state.sections}
           screens={sidebarScreens}
@@ -207,11 +188,11 @@ function XmapCanvasInner({ state, onStateChange, onRediscover }: XmapCanvasProps
         />
       </div>
 
-      <div className="flex-1 pt-[10px] pr-[10px] pb-[10px] h-screen overflow-hidden">
-        <div
-          className="h-full rounded-lg overflow-hidden relative bg-white"
-          style={{ border: '1px solid rgba(0,0,0,0.1)' }}
-        >
+      <div style={{ flex: 1, padding: '10px 10px 10px 0', height: '100vh', overflow: 'hidden' }}>
+        <div style={{
+          height: '100%', borderRadius: 8, overflow: 'hidden', position: 'relative',
+          background: '#fff', border: '1px solid rgba(0,0,0,0.1)',
+        }}>
           <ReactFlow
             nodes={nodes}
             edges={edges}
@@ -228,14 +209,13 @@ function XmapCanvasInner({ state, onStateChange, onRediscover }: XmapCanvasProps
             defaultEdgeOptions={{ type: 'smoothstep' }}
           >
             <Background variant={BackgroundVariant.Dots} gap={30} size={5} color="#e5e5e5" />
-            <Controls showInteractive={false} className="!bg-white !border-neutral-200 !shadow-sm !rounded-lg" />
+            <Controls showInteractive={false} />
             <MiniMap
               nodeColor={(n) => {
                 if (n.type === 'group-bg') return (n.data as GroupNodeData)?.color + '15';
                 return (n.data as ScreenNodeData)?.groupColor ?? '#e5e5e5';
               }}
               maskColor="rgba(255,255,255,0.7)"
-              className="!bg-white !border-neutral-200 !shadow-sm !rounded-lg"
             />
           </ReactFlow>
         </div>
