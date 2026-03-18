@@ -7,9 +7,12 @@ import pc from 'picocolors';
 import sirv from 'sirv';
 import { WebSocketServer } from 'ws';
 import { discoverRoutes } from '../discovery/index.js';
-import type { MapState } from '../../shared/types.js';
+import type { MapState, DiscoveredRoute, XmapScreen, XmapSection } from '../../shared/types.js';
+import { SECTION_COLORS, DEFAULT_IFRAME } from '../../shared/types.js';
 
-interface DevOptions {
+export interface DevOptions {
+  repoPath: string;
+  appUrl: string;
   port?: number;
   open?: boolean;
 }
@@ -25,16 +28,8 @@ function corsHeaders(): Record<string, string> {
 }
 
 function jsonResponse(res: ServerResponse, status: number, body: unknown) {
-  const payload = JSON.stringify(body);
-  res.writeHead(status, {
-    'Content-Type': 'application/json',
-    ...corsHeaders(),
-  });
-  res.end(payload);
-}
-
-function errorResponse(res: ServerResponse, status: number, message: string) {
-  jsonResponse(res, status, { error: message });
+  res.writeHead(status, { 'Content-Type': 'application/json', ...corsHeaders() });
+  res.end(JSON.stringify(body));
 }
 
 function readBody(req: IncomingMessage): Promise<string> {
@@ -46,113 +41,133 @@ function readBody(req: IncomingMessage): Promise<string> {
   });
 }
 
-function parseJsonBody<T = unknown>(raw: string): T | null {
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    return null;
-  }
+function routeToId(route: string): string {
+  return route
+    .replace(/^\//, '')
+    .replace(/\[([^\]]+)\]/g, '_$1_')
+    .replace(/[^a-zA-Z0-9_-]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+    || 'root';
 }
 
-/** Resolve and validate a repo path from the client. */
-function resolveRepoPath(raw: string | undefined): string | null {
-  if (!raw || typeof raw !== 'string') return null;
-  const resolved = resolve(raw);
-  if (!existsSync(resolved)) return null;
-  return resolved;
+function sectionLabel(id: string): string {
+  if (!id || id === 'root') return 'Root';
+  return id.charAt(0).toUpperCase() + id.slice(1).replace(/[-_]/g, ' ');
 }
 
-// ─── API handlers ─────────────────────────────────────────
+function buildState(
+  repoPath: string,
+  appUrl: string,
+  framework: string,
+  routes: DiscoveredRoute[]
+): MapState {
+  const sectionMap = new Map<string, string[]>();
+  const screens: XmapScreen[] = [];
 
-async function handleDiscover(req: IncomingMessage, res: ServerResponse) {
-  const raw = await readBody(req);
-  const body = parseJsonBody<{ repoPath?: string }>(raw);
-  if (!body) return errorResponse(res, 400, 'Invalid JSON body');
-
-  const repoPath = resolveRepoPath(body.repoPath);
-  if (!repoPath) return errorResponse(res, 400, 'Invalid or missing repoPath');
-
-  try {
-    const result = await discoverRoutes(repoPath);
-    jsonResponse(res, 200, result);
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Discovery failed';
-    errorResponse(res, 500, message);
+  for (const r of routes) {
+    const id = routeToId(r.route);
+    const section = r.section || 'root';
+    if (!sectionMap.has(section)) sectionMap.set(section, []);
+    sectionMap.get(section)!.push(id);
+    screens.push({
+      id, route: r.route, label: r.label, section, col: 0, row: 0,
+      isDynamic: r.isDynamic, params: r.params, filePath: r.filePath,
+    });
   }
+
+  const sections: XmapSection[] = [];
+  let colorIdx = 0;
+  for (const [id, screenIds] of sectionMap) {
+    sections.push({
+      id, label: sectionLabel(id),
+      color: SECTION_COLORS[colorIdx % SECTION_COLORS.length],
+      screens: screenIds,
+    });
+    colorIdx++;
+  }
+
+  let sectionRow = 0;
+  const COLS = 4;
+  for (const section of sections) {
+    const ss = screens.filter((s) => section.screens.includes(s.id));
+    let col = 0, row = sectionRow;
+    for (const screen of ss) {
+      screen.col = col; screen.row = row;
+      col++; if (col >= COLS) { col = 0; row++; }
+    }
+    sectionRow = (ss.length > 0 ? Math.max(...ss.map(s => s.row)) : sectionRow) + 2;
+  }
+
+  return {
+    repoPath, appUrl, framework, screens, sections,
+    edges: [], workflows: [], hiddenScreens: [], paramValues: {},
+    iframe: { ...DEFAULT_IFRAME }, savedAt: new Date().toISOString(),
+  };
 }
 
-async function handleSave(req: IncomingMessage, res: ServerResponse) {
-  const raw = await readBody(req);
-  const body = parseJsonBody<{ repoPath?: string; state?: MapState }>(raw);
-  if (!body) return errorResponse(res, 400, 'Invalid JSON body');
-
-  const repoPath = resolveRepoPath(body.repoPath);
-  if (!repoPath) return errorResponse(res, 400, 'Invalid or missing repoPath');
-  if (!body.state) return errorResponse(res, 400, 'Missing state');
-
-  try {
-    const xmapDir = resolve(repoPath, '.xmap');
-    if (!existsSync(xmapDir)) mkdirSync(xmapDir, { recursive: true });
-
-    const mapFile = resolve(xmapDir, 'map.json');
-    writeFileSync(mapFile, JSON.stringify(body.state, null, 2), 'utf8');
-    jsonResponse(res, 200, { ok: true });
-  } catch {
-    errorResponse(res, 500, 'Failed to write map.json');
+function loadState(repoPath: string, appUrl: string): MapState | null {
+  const mapFile = resolve(repoPath, '.xmap', 'map.json');
+  if (existsSync(mapFile)) {
+    try {
+      const state = JSON.parse(readFileSync(mapFile, 'utf8')) as MapState;
+      state.appUrl = appUrl;
+      if (!state.paramValues) state.paramValues = {};
+      return state;
+    } catch { /* fall through */ }
   }
+  return null;
 }
 
-function handleScreenshot(url: string, res: ServerResponse) {
-  // The screenshot path encodes repoPath as a query param: /__xmap/screenshots/:id?repo=/path
-  const parsed = new URL(url, 'http://localhost');
-  const repoPath = parsed.searchParams.get('repo');
-  const id = parsed.pathname.replace('/__xmap/screenshots/', '');
-
-  if (!repoPath || !id) {
-    res.writeHead(400);
-    res.end('Missing repo or screenshot id');
-    return;
-  }
-
-  const resolved = resolve(repoPath);
-  const filePath = resolve(resolved, '.xmap', 'screenshots', id);
-
-  // Prevent path traversal
-  if (!filePath.startsWith(resolve(resolved, '.xmap', 'screenshots'))) {
-    res.writeHead(403);
-    res.end('Forbidden');
-    return;
-  }
-
-  if (existsSync(filePath)) {
-    const data = readFileSync(filePath);
-    const ext = id.split('.').pop()?.toLowerCase();
-    const mime = ext === 'png' ? 'image/png' : ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : 'application/octet-stream';
-    res.writeHead(200, { 'Content-Type': mime, ...corsHeaders() });
-    res.end(data);
-  } else {
-    res.writeHead(404, corsHeaders());
-    res.end('Not found');
-  }
+function saveState(state: MapState) {
+  const dir = resolve(state.repoPath, '.xmap');
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  writeFileSync(resolve(dir, 'map.json'), JSON.stringify(state, null, 2), 'utf8');
 }
 
 // ─── Dev server ───────────────────────────────────────────
 
 export async function dev(options: DevOptions) {
+  const { repoPath, appUrl } = options;
   const port = options.port ?? 4200;
   const shouldOpen = options.open !== false;
 
-  // Resolve the pre-built UI directory
+  console.log();
+  console.log(pc.bold('  xmap'));
+  console.log();
+  console.log(`  ${pc.dim('Project:')} ${repoPath}`);
+  console.log(`  ${pc.dim('App URL:')} ${appUrl}`);
+  console.log();
+
+  // Load or discover
+  let state = loadState(repoPath, appUrl);
+
+  if (!state) {
+    console.log(pc.dim('  Discovering routes...'));
+    const { framework, routes } = await discoverRoutes(repoPath);
+    if (routes.length === 0) {
+      console.error(pc.red('  No routes found. Is this a Next.js project?'));
+      process.exit(1);
+    }
+    console.log(pc.green(`  Found ${routes.length} routes`));
+    state = buildState(repoPath, appUrl, framework, routes);
+    saveState(state);
+    console.log(pc.dim(`  Saved to .xmap/map.json`));
+  } else {
+    console.log(pc.dim(`  Loaded ${state.screens.length} screens from .xmap/map.json`));
+  }
+
+  console.log();
+
+  // UI assets
   const __dirname = dirname(fileURLToPath(import.meta.url));
   const uiDir = resolve(__dirname, '..', 'ui');
   if (!existsSync(uiDir)) {
-    console.error(pc.red('UI assets not found. The package may not be built correctly.'));
+    console.error(pc.red('  UI assets not found.'));
     process.exit(1);
   }
 
   const serveUi = sirv(uiDir, { single: true });
-
-  // WebSocket for live reload
   const wss = new WebSocketServer({ noServer: true });
 
   function broadcast(msg: object) {
@@ -162,125 +177,114 @@ export async function dev(options: DevOptions) {
     }
   }
 
-  // Track watched directories so we can watch when repo changes
-  let currentWatcher: ReturnType<typeof watch> | null = null;
-
-  function watchRepo(repoPath: string) {
-    const xmapDir = resolve(repoPath, '.xmap');
-    if (!existsSync(xmapDir)) return;
-
-    // Close previous watcher if repo changed
-    if (currentWatcher) {
-      currentWatcher.close();
-      currentWatcher = null;
-    }
-
+  // Watch .xmap/
+  const xmapDir = resolve(repoPath, '.xmap');
+  if (existsSync(xmapDir)) {
     try {
-      currentWatcher = watch(xmapDir, { recursive: true }, (_eventType, filename) => {
-        if (filename?.endsWith('.json')) {
-          console.log(pc.dim(`  Data changed: ${filename} — reloading`));
-          broadcast({ type: 'reload' });
-        }
+      watch(xmapDir, { recursive: true }, (_evt, filename) => {
+        if (filename?.endsWith('.json')) broadcast({ type: 'reload' });
       });
-    } catch {
-      // fs.watch may not be available everywhere
-    }
+    } catch { /* ok */ }
   }
 
-  // HTTP server
+  // HTTP
   const server = createServer(async (req, res) => {
     const url = req.url ?? '/';
 
-    // Handle CORS preflight
     if (req.method === 'OPTIONS' && url.startsWith('/__xmap/')) {
-      res.writeHead(204, corsHeaders());
-      res.end();
+      res.writeHead(204, corsHeaders()); res.end(); return;
+    }
+
+    // State — UI loads this on mount
+    if (url === '/__xmap/api/state' && req.method === 'GET') {
+      const fresh = loadState(repoPath, appUrl);
+      jsonResponse(res, 200, fresh ?? state);
       return;
     }
 
-    // ── API routes ──────────────────────────────────────
-
-    if (url === '/__xmap/api/discover' && req.method === 'POST') {
-      await handleDiscover(req, res);
-      return;
-    }
-
-    if (url === '/__xmap/api/load' && req.method === 'POST') {
-      const raw = await readBody(req);
-      const body = parseJsonBody<{ repoPath?: string }>(raw);
-      if (!body) return errorResponse(res, 400, 'Invalid JSON body');
-      const repoPath = resolveRepoPath(body.repoPath);
-      if (!repoPath) return errorResponse(res, 400, 'Invalid or missing repoPath');
-
-      // Start watching this repo
-      watchRepo(repoPath);
-
-      const mapFile = resolve(repoPath, '.xmap', 'map.json');
-      if (!existsSync(mapFile)) {
-        return jsonResponse(res, 200, null);
-      }
-      try {
-        const data = readFileSync(mapFile, 'utf8');
-        const state = JSON.parse(data) as MapState;
-        jsonResponse(res, 200, state);
-      } catch {
-        errorResponse(res, 500, 'Failed to read map.json');
-      }
-      return;
-    }
-
+    // Save — UI auto-saves
     if (url === '/__xmap/api/save' && req.method === 'POST') {
-      await handleSave(req, res);
+      try {
+        const raw = await readBody(req);
+        const body = JSON.parse(raw) as MapState;
+        body.repoPath = repoPath;
+        saveState(body);
+        state = body;
+        jsonResponse(res, 200, { ok: true });
+      } catch {
+        jsonResponse(res, 500, { error: 'Failed to save' });
+      }
       return;
     }
 
-    // ── Screenshots ─────────────────────────────────────
+    // Re-discover — re-scan and merge
+    if (url === '/__xmap/api/rediscover' && req.method === 'POST') {
+      try {
+        const { framework, routes } = await discoverRoutes(repoPath);
+        if (routes.length === 0) { jsonResponse(res, 200, state); return; }
 
+        const fresh = buildState(repoPath, appUrl, framework, routes);
+        const merged: MapState = {
+          ...fresh,
+          edges: state!.edges,
+          workflows: state!.workflows,
+          hiddenScreens: state!.hiddenScreens,
+          paramValues: state!.paramValues,
+        };
+        for (const screen of merged.screens) {
+          const old = state!.screens.find((s) => s.id === screen.id);
+          if (old) { screen.col = old.col; screen.row = old.row; }
+        }
+
+        saveState(merged);
+        state = merged;
+        console.log(pc.green(`  Re-discovered ${routes.length} routes`));
+        jsonResponse(res, 200, merged);
+      } catch (err) {
+        jsonResponse(res, 500, { error: (err as Error).message });
+      }
+      return;
+    }
+
+    // Screenshots
     if (url.startsWith('/__xmap/screenshots/')) {
-      handleScreenshot(url, res);
+      const id = url.replace('/__xmap/screenshots/', '');
+      const filePath = resolve(repoPath, '.xmap', 'screenshots', id);
+      if (!filePath.startsWith(resolve(repoPath, '.xmap', 'screenshots'))) {
+        res.writeHead(403); res.end(); return;
+      }
+      if (existsSync(filePath)) {
+        res.writeHead(200, { 'Content-Type': 'image/png', ...corsHeaders() });
+        res.end(readFileSync(filePath));
+      } else {
+        res.writeHead(404); res.end();
+      }
       return;
     }
 
-    // ── UI (catch-all, single-page app) ─────────────────
-
+    // UI
     serveUi(req, res);
   });
 
-  // Handle WebSocket upgrade
   server.on('upgrade', (req, socket, head) => {
     if (req.url === '/__xmap/ws') {
-      wss.handleUpgrade(req, socket, head, (ws) => {
-        wss.emit('connection', ws, req);
-      });
-    } else {
-      socket.destroy();
-    }
+      wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
+    } else { socket.destroy(); }
   });
 
-  // Start listening
   server.listen(port, () => {
-    console.log();
-    console.log(pc.bold('  xmap'));
-    console.log();
     console.log(`  ${pc.dim('Local:')}   ${pc.cyan(`http://localhost:${port}`)}`);
     console.log();
-
     if (shouldOpen) {
-      const openCmd =
-        process.platform === 'darwin' ? 'open' :
-        process.platform === 'win32' ? 'start' :
-        'xdg-open';
-      exec(`${openCmd} http://localhost:${port}`);
+      const cmd = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open';
+      exec(`${cmd} http://localhost:${port}`);
     }
   });
 
-  // Handle port in use
   server.on('error', (err: NodeJS.ErrnoException) => {
     if (err.code === 'EADDRINUSE') {
-      console.log(pc.yellow(`Port ${port} is in use, trying ${port + 1}...`));
+      console.log(pc.yellow(`  Port ${port} in use, trying ${port + 1}...`));
       server.listen(port + 1);
-    } else {
-      throw err;
-    }
+    } else { throw err; }
   });
 }

@@ -1,38 +1,24 @@
-import type { MapState, DiscoveredRoute } from '../shared/types';
+import type { MapState } from '../shared/types';
 
-const API = '/__xmap/api';
-
-export async function discoverRoutes(repoPath: string): Promise<{
-  framework: string;
-  routes: DiscoveredRoute[];
-}> {
-  const res = await fetch(`${API}/discover`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ repoPath }),
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(text || `Discovery failed: ${res.status}`);
-  }
+/** Load map state from the dev server (server already knows the repo) */
+export async function loadState(): Promise<MapState> {
+  const res = await fetch('/__xmap/api/state');
+  if (!res.ok) throw new Error(`Failed to load state: ${res.status}`);
   return res.json();
 }
 
-export async function loadMapState(repoPath: string): Promise<MapState | null> {
-  const res = await fetch(`${API}/load`, {
+/** Save map state */
+export async function saveState(state: MapState): Promise<void> {
+  await fetch('/__xmap/api/save', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ repoPath }),
+    body: JSON.stringify(state),
   });
-  if (!res.ok) return null;
-  const data = await res.json();
-  return data;
 }
 
-export async function saveMapState(repoPath: string, state: MapState): Promise<void> {
-  await fetch(`${API}/save`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ repoPath, state }),
-  });
+/** Re-discover routes (server merges with existing state) */
+export async function rediscover(): Promise<MapState> {
+  const res = await fetch('/__xmap/api/rediscover', { method: 'POST' });
+  if (!res.ok) throw new Error(`Re-discover failed: ${res.status}`);
+  return res.json();
 }

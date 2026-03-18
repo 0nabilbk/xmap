@@ -41,11 +41,10 @@ const nodeTypes: NodeTypes = {
 interface XmapCanvasProps {
   state: MapState;
   onStateChange: (state: MapState) => void;
-  onDisconnect: () => void;
   onRediscover: () => void;
 }
 
-function XmapCanvasInner({ state, onStateChange, onDisconnect, onRediscover }: XmapCanvasProps) {
+function XmapCanvasInner({ state, onStateChange, onRediscover }: XmapCanvasProps) {
   const [hiddenIds, setHiddenIds] = useState<Set<string>>(() => {
     const saved = loadHidden();
     return new Set([...saved, ...state.hiddenScreens]);
@@ -204,7 +203,6 @@ function XmapCanvasInner({ state, onStateChange, onDisconnect, onRediscover }: X
           onWorkflowSelect={handleWorkflowSelect}
           repoPath={state.repoPath}
           appUrl={state.appUrl}
-          onDisconnect={onDisconnect}
           onRediscover={onRediscover}
         />
       </div>
