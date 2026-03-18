@@ -99,9 +99,33 @@ function buildState(
     sectionRow = (ss.length > 0 ? Math.max(...ss.map(s => s.row)) : sectionRow) + 2;
   }
 
+  // Auto-generate edges from route hierarchy
+  // Parent route → child route, and section root → section children
+  const edges: Array<{ source: string; target: string; label?: string }> = [];
+  const screenMap = new Map(screens.map((s) => [s.route, s]));
+
+  for (const screen of screens) {
+    const segments = screen.route.split('/').filter(Boolean);
+    if (segments.length === 0) continue;
+
+    // Try to find parent: /a/b/c → /a/b → /a → /
+    for (let i = segments.length - 1; i >= 0; i--) {
+      const parentRoute = i === 0 ? '/' : '/' + segments.slice(0, i).join('/');
+      const parent = screenMap.get(parentRoute);
+      if (parent) {
+        const lastSegment = segments[segments.length - 1];
+        const label = lastSegment.startsWith('[')
+          ? undefined
+          : lastSegment.charAt(0).toUpperCase() + lastSegment.slice(1).replace(/-/g, ' ');
+        edges.push({ source: parent.id, target: screen.id, label });
+        break;
+      }
+    }
+  }
+
   return {
     repoPath, appUrl, framework, screens, sections,
-    edges: [], workflows: [], hiddenScreens: [], paramValues: {},
+    edges, workflows: [], hiddenScreens: [], paramValues: {},
     iframe: { ...DEFAULT_IFRAME }, savedAt: new Date().toISOString(),
   };
 }
