@@ -17,10 +17,11 @@
     "dist/"
   ],
   "scripts": {
-    "build": "pnpm build:cli && pnpm build:ui",
-    "build:cli": "tsup src/cli/index.ts --format esm --dts --outDir dist/cli --target node18 --clean",
+    "build": "pnpm build:cli && pnpm build:ui && pnpm build:shared",
+    "build:cli": "tsup src/cli/index.ts --format esm --outDir dist/cli --target node18 --clean",
     "build:ui": "vite build",
-    "dev:cli": "tsup src/cli/index.ts --format esm --dts --outDir dist/cli --target node18 --watch",
+    "build:shared": "tsup src/shared/index.ts --format esm --dts --outDir dist/shared --target node18",
+    "dev:cli": "tsup src/cli/index.ts --format esm --outDir dist/cli --target node18 --watch",
     "prepublishOnly": "pnpm build"
   },
   "dependencies": {

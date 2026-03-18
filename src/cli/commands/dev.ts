@@ -1,46 +1,155 @@
-import { createServer } from 'node:http';
-import { existsSync, readFileSync, watch } from 'node:fs';
-import { resolve, extname, join } from 'node:path';
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, watch } from 'node:fs';
+import { resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { exec } from 'node:child_process';
 import pc from 'picocolors';
 import sirv from 'sirv';
 import { WebSocketServer } from 'ws';
+import { discoverRoutes } from '../discovery/index.js';
+import type { MapState } from '../../shared/types.js';
 
 interface DevOptions {
   port?: number;
   open?: boolean;
 }
 
-const MIME_TYPES: Record<string, string> = {
-  '.html': 'text/html',
-  '.js': 'application/javascript',
-  '.css': 'text/css',
-  '.json': 'application/json',
-  '.png': 'image/png',
-  '.svg': 'image/svg+xml',
-};
+// ─── Helpers ──────────────────────────────────────────────
+
+function corsHeaders(): Record<string, string> {
+  return {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
+  };
+}
+
+function jsonResponse(res: ServerResponse, status: number, body: unknown) {
+  const payload = JSON.stringify(body);
+  res.writeHead(status, {
+    'Content-Type': 'application/json',
+    ...corsHeaders(),
+  });
+  res.end(payload);
+}
+
+function errorResponse(res: ServerResponse, status: number, message: string) {
+  jsonResponse(res, status, { error: message });
+}
+
+function readBody(req: IncomingMessage): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (chunk: Buffer) => chunks.push(chunk));
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    req.on('error', reject);
+  });
+}
+
+function parseJsonBody<T = unknown>(raw: string): T | null {
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
+/** Resolve and validate a repo path from the client. */
+function resolveRepoPath(raw: string | undefined): string | null {
+  if (!raw || typeof raw !== 'string') return null;
+  const resolved = resolve(raw);
+  if (!existsSync(resolved)) return null;
+  return resolved;
+}
+
+// ─── API handlers ─────────────────────────────────────────
+
+async function handleDiscover(req: IncomingMessage, res: ServerResponse) {
+  const raw = await readBody(req);
+  const body = parseJsonBody<{ repoPath?: string }>(raw);
+  if (!body) return errorResponse(res, 400, 'Invalid JSON body');
+
+  const repoPath = resolveRepoPath(body.repoPath);
+  if (!repoPath) return errorResponse(res, 400, 'Invalid or missing repoPath');
+
+  try {
+    const result = await discoverRoutes(repoPath);
+    jsonResponse(res, 200, result);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Discovery failed';
+    errorResponse(res, 500, message);
+  }
+}
+
+async function handleSave(req: IncomingMessage, res: ServerResponse) {
+  const raw = await readBody(req);
+  const body = parseJsonBody<{ repoPath?: string; state?: MapState }>(raw);
+  if (!body) return errorResponse(res, 400, 'Invalid JSON body');
+
+  const repoPath = resolveRepoPath(body.repoPath);
+  if (!repoPath) return errorResponse(res, 400, 'Invalid or missing repoPath');
+  if (!body.state) return errorResponse(res, 400, 'Missing state');
+
+  try {
+    const xmapDir = resolve(repoPath, '.xmap');
+    if (!existsSync(xmapDir)) mkdirSync(xmapDir, { recursive: true });
+
+    const mapFile = resolve(xmapDir, 'map.json');
+    writeFileSync(mapFile, JSON.stringify(body.state, null, 2), 'utf8');
+    jsonResponse(res, 200, { ok: true });
+  } catch {
+    errorResponse(res, 500, 'Failed to write map.json');
+  }
+}
+
+function handleScreenshot(url: string, res: ServerResponse) {
+  // The screenshot path encodes repoPath as a query param: /__xmap/screenshots/:id?repo=/path
+  const parsed = new URL(url, 'http://localhost');
+  const repoPath = parsed.searchParams.get('repo');
+  const id = parsed.pathname.replace('/__xmap/screenshots/', '');
+
+  if (!repoPath || !id) {
+    res.writeHead(400);
+    res.end('Missing repo or screenshot id');
+    return;
+  }
+
+  const resolved = resolve(repoPath);
+  const filePath = resolve(resolved, '.xmap', 'screenshots', id);
+
+  // Prevent path traversal
+  if (!filePath.startsWith(resolve(resolved, '.xmap', 'screenshots'))) {
+    res.writeHead(403);
+    res.end('Forbidden');
+    return;
+  }
+
+  if (existsSync(filePath)) {
+    const data = readFileSync(filePath);
+    const ext = id.split('.').pop()?.toLowerCase();
+    const mime = ext === 'png' ? 'image/png' : ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : 'application/octet-stream';
+    res.writeHead(200, { 'Content-Type': mime, ...corsHeaders() });
+    res.end(data);
+  } else {
+    res.writeHead(404, corsHeaders());
+    res.end('Not found');
+  }
+}
+
+// ─── Dev server ───────────────────────────────────────────
 
 export async function dev(options: DevOptions) {
   const port = options.port ?? 4200;
   const shouldOpen = options.open !== false;
-  const cwd = process.cwd();
-
-  // Check .xmap/screens.json exists
-  const dataPath = resolve(cwd, '.xmap', 'screens.json');
-  if (!existsSync(dataPath)) {
-    console.error(pc.red('No .xmap/screens.json found.'));
-    console.error(pc.dim(`Run ${pc.cyan('xmap crawl')} first to discover screens.`));
-    process.exit(1);
-  }
 
   // Resolve the pre-built UI directory
-  const uiDir = resolve(import.meta.dirname, '..', '..', 'ui');
+  const __dirname = dirname(fileURLToPath(import.meta.url));
+  const uiDir = resolve(__dirname, '..', 'ui');
   if (!existsSync(uiDir)) {
     console.error(pc.red('UI assets not found. The package may not be built correctly.'));
     process.exit(1);
   }
 
-  // Static file handler for the pre-built UI
   const serveUi = sirv(uiDir, { single: true });
 
   // WebSocket for live reload
@@ -53,39 +162,87 @@ export async function dev(options: DevOptions) {
     }
   }
 
+  // Track watched directories so we can watch when repo changes
+  let currentWatcher: ReturnType<typeof watch> | null = null;
+
+  function watchRepo(repoPath: string) {
+    const xmapDir = resolve(repoPath, '.xmap');
+    if (!existsSync(xmapDir)) return;
+
+    // Close previous watcher if repo changed
+    if (currentWatcher) {
+      currentWatcher.close();
+      currentWatcher = null;
+    }
+
+    try {
+      currentWatcher = watch(xmapDir, { recursive: true }, (_eventType, filename) => {
+        if (filename?.endsWith('.json')) {
+          console.log(pc.dim(`  Data changed: ${filename} — reloading`));
+          broadcast({ type: 'reload' });
+        }
+      });
+    } catch {
+      // fs.watch may not be available everywhere
+    }
+  }
+
   // HTTP server
-  const server = createServer((req, res) => {
+  const server = createServer(async (req, res) => {
     const url = req.url ?? '/';
 
-    // API: serve xmap data
-    if (url === '/__xmap/data.json') {
+    // Handle CORS preflight
+    if (req.method === 'OPTIONS' && url.startsWith('/__xmap/')) {
+      res.writeHead(204, corsHeaders());
+      res.end();
+      return;
+    }
+
+    // ── API routes ──────────────────────────────────────
+
+    if (url === '/__xmap/api/discover' && req.method === 'POST') {
+      await handleDiscover(req, res);
+      return;
+    }
+
+    if (url === '/__xmap/api/load' && req.method === 'POST') {
+      const raw = await readBody(req);
+      const body = parseJsonBody<{ repoPath?: string }>(raw);
+      if (!body) return errorResponse(res, 400, 'Invalid JSON body');
+      const repoPath = resolveRepoPath(body.repoPath);
+      if (!repoPath) return errorResponse(res, 400, 'Invalid or missing repoPath');
+
+      // Start watching this repo
+      watchRepo(repoPath);
+
+      const mapFile = resolve(repoPath, '.xmap', 'map.json');
+      if (!existsSync(mapFile)) {
+        return jsonResponse(res, 200, null);
+      }
       try {
-        const data = readFileSync(dataPath, 'utf8');
-        res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
-        res.end(data);
+        const data = readFileSync(mapFile, 'utf8');
+        const state = JSON.parse(data) as MapState;
+        jsonResponse(res, 200, state);
       } catch {
-        res.writeHead(500);
-        res.end('Failed to read data');
+        errorResponse(res, 500, 'Failed to read map.json');
       }
       return;
     }
 
-    // API: serve screenshots
+    if (url === '/__xmap/api/save' && req.method === 'POST') {
+      await handleSave(req, res);
+      return;
+    }
+
+    // ── Screenshots ─────────────────────────────────────
+
     if (url.startsWith('/__xmap/screenshots/')) {
-      const filename = url.replace('/__xmap/screenshots/', '');
-      const filePath = resolve(cwd, '.xmap', 'screenshots', filename);
-      if (existsSync(filePath)) {
-        const data = readFileSync(filePath);
-        res.writeHead(200, { 'Content-Type': 'image/png' });
-        res.end(data);
-      } else {
-        res.writeHead(404);
-        res.end('Not found');
-      }
+      handleScreenshot(url, res);
       return;
     }
 
-    // Everything else: serve the pre-built UI
+    // ── UI (catch-all, single-page app) ─────────────────
+
     serveUi(req, res);
   });
 
@@ -100,29 +257,19 @@ export async function dev(options: DevOptions) {
     }
   });
 
-  // Watch for data changes
-  const xmapDir = resolve(cwd, '.xmap');
-  try {
-    watch(xmapDir, { recursive: true }, (eventType, filename) => {
-      if (filename?.endsWith('.json')) {
-        console.log(pc.dim(`  Data changed: ${filename} — reloading`));
-        broadcast({ type: 'reload' });
-      }
-    });
-  } catch {
-    // fs.watch may not be available everywhere
-  }
-
   // Start listening
   server.listen(port, () => {
     console.log();
-    console.log(pc.bold('  xmap dev server'));
+    console.log(pc.bold('  xmap'));
     console.log();
     console.log(`  ${pc.dim('Local:')}   ${pc.cyan(`http://localhost:${port}`)}`);
     console.log();
 
     if (shouldOpen) {
-      const openCmd = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open';
+      const openCmd =
+        process.platform === 'darwin' ? 'open' :
+        process.platform === 'win32' ? 'start' :
+        'xdg-open';
       exec(`${openCmd} http://localhost:${port}`);
     }
   });

@@ -1,9 +1,14 @@
 #!/usr/bin/env node
 
 import cac from 'cac';
-import { version } from '../../package.json' with { type: 'json' };
+import { readFileSync } from 'node:fs';
+import { resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const pkg = JSON.parse(readFileSync(resolve(__dirname, '..', '..', 'package.json'), 'utf8'));
+const version = pkg.version as string;
 import { init } from './commands/init.js';
-import { crawl } from './commands/crawl.js';
 import { dev } from './commands/dev.js';
 
 const cli = cac('xmap');
@@ -13,13 +18,7 @@ cli
   .action(init);
 
 cli
-  .command('crawl', 'Discover screens by crawling your running app')
-  .option('--url <url>', 'Override target URL')
-  .option('--max <n>', 'Override max pages', { default: 0 })
-  .action(crawl);
-
-cli
-  .command('dev', 'Start the xmap viewer')
+  .command('dev', 'Start the xmap editor')
   .alias('')
   .option('--port <port>', 'Dev server port', { default: 4200 })
   .option('--no-open', 'Don\'t auto-open browser')

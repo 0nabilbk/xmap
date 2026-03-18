@@ -20,9 +20,8 @@ export function buildGraph(
   activeWorkflow?: XmapWorkflow | null
 ) {
   const NODE_W = Math.round(iframeConfig.width * iframeConfig.scale) + 16;
-  const NODE_H = Math.round(iframeConfig.height * iframeConfig.scale) + 80; // label + route bars
+  const NODE_H = Math.round(iframeConfig.height * iframeConfig.scale) + 80;
 
-  // Filter visible screens
   const visibleScreens = activeWorkflow
     ? screens.filter((s) => activeWorkflow.screenIds.includes(s.id))
     : screens.filter((s) => !hiddenIds.has(s.id));
@@ -60,7 +59,10 @@ export function buildGraph(
         y: minRow * RH - PAD - 24,
       },
       zIndex: -1,
-      style: { width: (maxCol - minCol) * CW + NODE_W + PAD * 2, height: (maxRow - minRow) * RH + NODE_H + PAD * 2 + 24 },
+      style: {
+        width: (maxCol - minCol) * CW + NODE_W + PAD * 2,
+        height: (maxRow - minRow) * RH + NODE_H + PAD * 2 + 24,
+      },
       data: {
         label: section.label,
         color: section.color,
@@ -80,6 +82,14 @@ export function buildGraph(
       ? { x: s.col * CW - groupOrigin.x, y: s.row * RH - groupOrigin.y }
       : { x: s.col * CW, y: s.row * RH };
 
+    // Build the iframe URL
+    let url = appUrl.replace(/\/$/, '') + s.route;
+    // For dynamic routes, use the route pattern as-is (user will need running app)
+    // Replace [param] with placeholder for display
+    if (s.isDynamic) {
+      url = appUrl.replace(/\/$/, '') + s.route;
+    }
+
     return {
       id: s.id,
       type: 'screen',
@@ -88,12 +98,11 @@ export function buildGraph(
       expandParent: true,
       zIndex: 2,
       data: {
-        label: s.title || s.route,
+        label: s.label,
         route: s.route,
-        url: s.url,
+        url,
         group: s.section,
         groupColor: sectionColorMap.get(s.section) ?? '#999',
-        screenshotUrl: s.screenshot ? `/__xmap/screenshots/${s.id}.png` : undefined,
         iframeWidth: iframeConfig.width,
         iframeHeight: iframeConfig.height,
         iframeScale: iframeConfig.scale,

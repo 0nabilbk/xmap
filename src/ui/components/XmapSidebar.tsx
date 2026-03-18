@@ -19,6 +19,9 @@ interface XmapSidebarProps {
   workflows: XmapWorkflow[];
   activeWorkflowId: string | null;
   onWorkflowSelect: (id: string | null) => void;
+  repoPath: string;
+  appUrl: string;
+  onDisconnect: () => void;
 }
 
 function ChevronIcon({ expanded }: { expanded: boolean }) {
@@ -45,17 +48,29 @@ export default function XmapSidebar({
   workflows,
   activeWorkflowId,
   onWorkflowSelect,
+  repoPath,
+  appUrl,
+  onDisconnect,
 }: XmapSidebarProps) {
   const [expandedSection, setExpandedSection] = useState<string | null>(null);
   const visibleCount = totalScreens - hiddenIds.size;
   const activeWorkflow = workflows.find((w) => w.id === activeWorkflowId);
 
+  // Short repo name for display
+  const repoName = repoPath.split('/').filter(Boolean).pop() || repoPath;
+
   return (
     <aside className="w-[239px] h-screen flex flex-col bg-[#f5f5f5] relative overflow-hidden" style={{ minWidth: '239px' }}>
-      {/* Title */}
+      {/* Header — repo info */}
       <div className="pt-6 pb-3 px-3.5">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2" style={{ marginBottom: 4 }}>
           <span className="text-[15px] font-semibold text-[#292929]">xmap</span>
+          <span style={{ fontSize: 10, color: '#a3a3a3', fontWeight: 500, background: '#e5e5e5', padding: '1px 6px', borderRadius: 4 }}>
+            {repoName}
+          </span>
+        </div>
+        <div style={{ fontSize: 11, color: '#a3a3a3', fontFamily: 'ui-monospace, monospace', wordBreak: 'break-all' }}>
+          {appUrl}
         </div>
       </div>
 
@@ -207,11 +222,18 @@ export default function XmapSidebar({
 
       {/* Footer */}
       <div className="pb-6 px-3.5">
-        <div className="text-[13px] text-[#a3a3a3] leading-relaxed" style={{ fontWeight: 470 }}>
+        <div className="text-[13px] text-[#a3a3a3] leading-relaxed" style={{ fontWeight: 470, marginBottom: 8 }}>
           Scroll to zoom &middot; Drag to pan
           <br />
-          Double-click to open
+          Double-click to open &middot; Drag handles to connect
         </div>
+        <button
+          onClick={onDisconnect}
+          className="text-[12px] text-[#a3a3a3] hover:text-[#292929] transition-colors cursor-pointer"
+          style={{ fontWeight: 470 }}
+        >
+          Switch project
+        </button>
       </div>
     </aside>
   );
