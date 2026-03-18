@@ -11,20 +11,17 @@ import {
   BackgroundVariant,
   type Node,
   type NodeTypes,
-  type NodeChange,
   type Connection,
   addEdge,
-  type Edge,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 
-import type { MapState, XmapWorkflow } from '../../shared/types';
+import type { MapState } from '../../shared/types';
 import ScreenNode, { type ScreenNodeData } from './ScreenNode';
 import GroupNode, { type GroupNodeData } from './GroupNode';
 import XmapSidebar from './XmapSidebar';
 import { buildGraph } from '../layout';
 
-// ─── localStorage ────────────────────────────────────────
 const HIDDEN_KEY = 'xmap-hidden-v1';
 function loadHidden(): Set<string> {
   try {
@@ -45,9 +42,10 @@ interface XmapCanvasProps {
   state: MapState;
   onStateChange: (state: MapState) => void;
   onDisconnect: () => void;
+  onRediscover: () => void;
 }
 
-function XmapCanvasInner({ state, onStateChange, onDisconnect }: XmapCanvasProps) {
+function XmapCanvasInner({ state, onStateChange, onDisconnect, onRediscover }: XmapCanvasProps) {
   const [hiddenIds, setHiddenIds] = useState<Set<string>>(() => {
     const saved = loadHidden();
     return new Set([...saved, ...state.hiddenScreens]);
@@ -55,13 +53,15 @@ function XmapCanvasInner({ state, onStateChange, onDisconnect }: XmapCanvasProps
   const [activeSection, setActiveSection] = useState<string | null>(null);
   const [activeWorkflowId, setActiveWorkflowId] = useState<string | null>(null);
   const reactFlow = useReactFlow();
+  const stateRef = useRef(state);
+  stateRef.current = state;
 
   const activeWorkflow = useMemo(
     () => state.workflows.find((w) => w.id === activeWorkflowId) ?? null,
     [activeWorkflowId, state.workflows]
   );
 
-  const handleHideRef = useRef((id: string) => {
+  const handleHide = useCallback((id: string) => {
     startTransition(() => {
       setHiddenIds((prev) => {
         const next = new Set(prev);
@@ -70,8 +70,7 @@ function XmapCanvasInner({ state, onStateChange, onDisconnect }: XmapCanvasProps
         return next;
       });
     });
-  });
-  const handleHide = handleHideRef.current;
+  }, []);
 
   const handleToggleScreen = useCallback((id: string) => {
     startTransition(() => {
@@ -112,6 +111,17 @@ function XmapCanvasInner({ state, onStateChange, onDisconnect }: XmapCanvasProps
     return () => clearTimeout(timer);
   }, [activeWorkflowId, reactFlow]);
 
+  // Param change handler — updates paramValues in state
+  const handleParamChange = useCallback((screenId: string, param: string, value: string) => {
+    const s = stateRef.current;
+    const existing = s.paramValues[screenId] ?? {};
+    const updated = { ...existing, [param]: value };
+    onStateChange({
+      ...s,
+      paramValues: { ...s.paramValues, [screenId]: updated },
+    });
+  }, [onStateChange]);
+
   const graph = useMemo(() => {
     return buildGraph(
       state.screens,
@@ -121,9 +131,11 @@ function XmapCanvasInner({ state, onStateChange, onDisconnect }: XmapCanvasProps
       handleHide,
       state.iframe,
       state.appUrl,
+      state.paramValues,
+      handleParamChange,
       activeWorkflow
     );
-  }, [state, hiddenIds, handleHide, activeWorkflow]);
+  }, [state, hiddenIds, handleHide, handleParamChange, activeWorkflow]);
 
   const [nodes, setNodes, onNodesChange] = useNodesState(graph.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(graph.edges);
@@ -137,37 +149,39 @@ function XmapCanvasInner({ state, onStateChange, onDisconnect }: XmapCanvasProps
     if (d?.url) window.open(d.url, '_blank');
   }, []);
 
-  // Handle edge connections drawn by the user
   const onConnect = useCallback((connection: Connection) => {
+    // Prompt for edge label
+    const label = window.prompt('Edge label (optional):') ?? undefined;
+
     setEdges((eds) => addEdge({
       ...connection,
+      label,
       type: 'smoothstep',
       style: { stroke: '#d4d4d4', strokeWidth: 1.5 },
+      labelStyle: { fontSize: 10, fill: '#a3a3a3', fontWeight: 500 },
       markerEnd: { type: 'arrowclosed' as any, color: '#d4d4d4', width: 14, height: 14 },
     }, eds));
 
-    // Persist the new edge
     if (connection.source && connection.target) {
-      const newEdge = { source: connection.source, target: connection.target };
-      const exists = state.edges.some(
+      const newEdge = { source: connection.source, target: connection.target, label };
+      const s = stateRef.current;
+      const exists = s.edges.some(
         (e) => e.source === newEdge.source && e.target === newEdge.target
       );
       if (!exists) {
-        onStateChange({
-          ...state,
-          edges: [...state.edges, newEdge],
-        });
+        onStateChange({ ...s, edges: [...s.edges, newEdge] });
       }
     }
-  }, [state, onStateChange, setEdges]);
+  }, [onStateChange, setEdges]);
 
   // Sync hidden state back to MapState
   useEffect(() => {
     const arr = [...hiddenIds];
-    if (JSON.stringify(arr.sort()) !== JSON.stringify([...state.hiddenScreens].sort())) {
-      onStateChange({ ...state, hiddenScreens: arr });
+    const current = [...stateRef.current.hiddenScreens].sort();
+    if (JSON.stringify(arr.sort()) !== JSON.stringify(current)) {
+      onStateChange({ ...stateRef.current, hiddenScreens: arr });
     }
-  }, [hiddenIds]); // intentionally not including state to avoid loop
+  }, [hiddenIds, onStateChange]);
 
   const sidebarScreens = useMemo(() =>
     state.screens.map((s) => ({ id: s.id, label: s.label })),
@@ -191,6 +205,7 @@ function XmapCanvasInner({ state, onStateChange, onDisconnect }: XmapCanvasProps
           repoPath={state.repoPath}
           appUrl={state.appUrl}
           onDisconnect={onDisconnect}
+          onRediscover={onRediscover}
         />
       </div>
 

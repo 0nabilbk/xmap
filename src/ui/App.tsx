@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { MapState, XmapScreen, XmapSection, XmapEdge, DiscoveredRoute } from '../shared/types';
+import type { MapState, XmapScreen, XmapSection, DiscoveredRoute } from '../shared/types';
 import { SECTION_COLORS, DEFAULT_IFRAME } from '../shared/types';
 import { discoverRoutes, loadMapState, saveMapState } from './data-loader';
 import SetupScreen from './components/SetupScreen';
@@ -15,13 +15,17 @@ function routeToId(route: string): string {
     || 'root';
 }
 
+function sectionLabel(id: string): string {
+  if (!id || id === 'root') return 'Root';
+  return id.charAt(0).toUpperCase() + id.slice(1).replace(/[-_]/g, ' ');
+}
+
 function buildInitialState(
   repoPath: string,
   appUrl: string,
   framework: string,
   routes: DiscoveredRoute[]
 ): MapState {
-  // Group into sections by first path segment
   const sectionMap = new Map<string, string[]>();
   const screens: XmapScreen[] = [];
 
@@ -45,13 +49,12 @@ function buildInitialState(
     });
   }
 
-  // Build sections with colors
   const sections: XmapSection[] = [];
   let colorIdx = 0;
   for (const [id, screenIds] of sectionMap) {
     sections.push({
       id,
-      label: id.charAt(0).toUpperCase() + id.slice(1).replace(/-/g, ' '),
+      label: sectionLabel(id),
       color: SECTION_COLORS[colorIdx % SECTION_COLORS.length],
       screens: screenIds,
     });
@@ -83,6 +86,7 @@ function buildInitialState(
     edges: [],
     workflows: [],
     hiddenScreens: [],
+    paramValues: {},
     iframe: { ...DEFAULT_IFRAME },
     savedAt: new Date().toISOString(),
   };
@@ -95,13 +99,16 @@ export default function App() {
   const [checking, setChecking] = useState(true);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout>>();
 
-  // Check localStorage for last used repo path and try to load saved state
   useEffect(() => {
     const lastRepo = localStorage.getItem('xmap-last-repo');
     if (lastRepo) {
       loadMapState(lastRepo)
         .then((state) => {
-          if (state) setMapState(state);
+          if (state) {
+            // Ensure paramValues exists (might be missing in older saves)
+            if (!state.paramValues) state.paramValues = {};
+            setMapState(state);
+          }
           setChecking(false);
         })
         .catch(() => setChecking(false));
@@ -115,18 +122,16 @@ export default function App() {
     setSetupError(null);
 
     try {
-      // First try loading existing saved state
       const existing = await loadMapState(repoPath);
       if (existing) {
-        // Update appUrl if different
         existing.appUrl = appUrl;
+        if (!existing.paramValues) existing.paramValues = {};
         setMapState(existing);
         localStorage.setItem('xmap-last-repo', repoPath);
         setSetupLoading(false);
         return;
       }
 
-      // Discover routes from code
       const { framework, routes } = await discoverRoutes(repoPath);
 
       if (routes.length === 0) {
@@ -138,8 +143,6 @@ export default function App() {
       const state = buildInitialState(repoPath, appUrl, framework, routes);
       setMapState(state);
       localStorage.setItem('xmap-last-repo', repoPath);
-
-      // Auto-save initial state
       await saveMapState(repoPath, state);
     } catch (err) {
       setSetupError((err as Error).message);
@@ -148,7 +151,6 @@ export default function App() {
     setSetupLoading(false);
   }, []);
 
-  // Auto-save on state changes (debounced)
   const handleStateChange = useCallback((newState: MapState) => {
     setMapState(newState);
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
@@ -161,6 +163,40 @@ export default function App() {
     setMapState(null);
     localStorage.removeItem('xmap-last-repo');
   }, []);
+
+  // Re-discover: re-scan routes, merge with existing state (keep edges, workflows, paramValues, hidden)
+  const handleRediscover = useCallback(async () => {
+    if (!mapState) return;
+    try {
+      const { framework, routes } = await discoverRoutes(mapState.repoPath);
+      if (routes.length === 0) return;
+
+      const fresh = buildInitialState(mapState.repoPath, mapState.appUrl, framework, routes);
+
+      // Merge: keep user's edges, workflows, paramValues, hidden screens
+      const merged: MapState = {
+        ...fresh,
+        edges: mapState.edges,
+        workflows: mapState.workflows,
+        hiddenScreens: mapState.hiddenScreens,
+        paramValues: mapState.paramValues,
+      };
+
+      // Preserve positions for screens that still exist
+      for (const screen of merged.screens) {
+        const old = mapState.screens.find((s) => s.id === screen.id);
+        if (old) {
+          screen.col = old.col;
+          screen.row = old.row;
+        }
+      }
+
+      setMapState(merged);
+      await saveMapState(merged.repoPath, { ...merged, savedAt: new Date().toISOString() });
+    } catch (err) {
+      console.error('Re-discover failed:', err);
+    }
+  }, [mapState]);
 
   if (checking) {
     return (
@@ -187,6 +223,7 @@ export default function App() {
       state={mapState}
       onStateChange={handleStateChange}
       onDisconnect={handleDisconnect}
+      onRediscover={handleRediscover}
     />
   );
 }

@@ -22,6 +22,7 @@ interface XmapSidebarProps {
   repoPath: string;
   appUrl: string;
   onDisconnect: () => void;
+  onRediscover: () => void;
 }
 
 function ChevronIcon({ expanded }: { expanded: boolean }) {
@@ -51,6 +52,7 @@ export default function XmapSidebar({
   repoPath,
   appUrl,
   onDisconnect,
+  onRediscover,
 }: XmapSidebarProps) {
   const [expandedSection, setExpandedSection] = useState<string | null>(null);
   const visibleCount = totalScreens - hiddenIds.size;
@@ -227,13 +229,22 @@ export default function XmapSidebar({
           <br />
           Double-click to open &middot; Drag handles to connect
         </div>
-        <button
-          onClick={onDisconnect}
-          className="text-[12px] text-[#a3a3a3] hover:text-[#292929] transition-colors cursor-pointer"
-          style={{ fontWeight: 470 }}
-        >
-          Switch project
-        </button>
+        <div style={{ display: 'flex', gap: 12 }}>
+          <button
+            onClick={onRediscover}
+            className="text-[12px] text-[#a3a3a3] hover:text-[#292929] transition-colors cursor-pointer"
+            style={{ fontWeight: 470 }}
+          >
+            Re-scan routes
+          </button>
+          <button
+            onClick={onDisconnect}
+            className="text-[12px] text-[#a3a3a3] hover:text-[#292929] transition-colors cursor-pointer"
+            style={{ fontWeight: 470 }}
+          >
+            Switch project
+          </button>
+        </div>
       </div>
     </aside>
   );

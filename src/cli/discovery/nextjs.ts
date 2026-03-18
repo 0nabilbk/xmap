@@ -232,10 +232,18 @@ function generateLabel(segments: string[]): string {
   if (dynamic) {
     const paramName = dynamic[1];
     const parent = segments.length >= 2 ? segments[segments.length - 2] : null;
-    if (parent && !parent.startsWith("[")) {
+    if (parent && !parent.startsWith("[") && parent.length > 2) {
       return singularize(formatSegment(parent)) + " Detail";
     }
     return formatSegment(paramName) + " Detail";
+  }
+
+  // For very short segments (1-2 chars), include parent for context
+  if (last.length <= 2 && segments.length >= 2) {
+    const parent = segments[segments.length - 2];
+    if (!parent.startsWith("[")) {
+      return formatSegment(parent) + " / " + formatSegment(last);
+    }
   }
 
   return formatSegment(last);

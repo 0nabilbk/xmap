@@ -4,7 +4,6 @@ import type { XmapScreen, XmapSection, XmapWorkflow, XmapEdge } from '../shared/
 import type { GroupNodeData } from './components/GroupNode';
 import type { ScreenNodeData } from './components/ScreenNode';
 
-// ─── Grid constants ────────────────────────────────────
 const CW = 480;
 const RH = 420;
 const PAD = 48;
@@ -17,6 +16,8 @@ export function buildGraph(
   onHide: (id: string) => void,
   iframeConfig: { width: number; height: number; scale: number },
   appUrl: string,
+  paramValues: Record<string, Record<string, string>>,
+  onParamChange: (screenId: string, param: string, value: string) => void,
   activeWorkflow?: XmapWorkflow | null
 ) {
   const NODE_W = Math.round(iframeConfig.width * iframeConfig.scale) + 16;
@@ -74,6 +75,7 @@ export function buildGraph(
 
   // Screen nodes
   const sectionColorMap = new Map(sections.map((s) => [s.id, s.color]));
+  const baseUrl = appUrl.replace(/\/$/, '');
 
   const screenNodes: Node[] = visibleScreens.map((s) => {
     const groupOrigin = sectionOrigins[s.section];
@@ -82,13 +84,7 @@ export function buildGraph(
       ? { x: s.col * CW - groupOrigin.x, y: s.row * RH - groupOrigin.y }
       : { x: s.col * CW, y: s.row * RH };
 
-    // Build the iframe URL
-    let url = appUrl.replace(/\/$/, '') + s.route;
-    // For dynamic routes, use the route pattern as-is (user will need running app)
-    // Replace [param] with placeholder for display
-    if (s.isDynamic) {
-      url = appUrl.replace(/\/$/, '') + s.route;
-    }
+    const url = baseUrl + s.route;
 
     return {
       id: s.id,
@@ -107,6 +103,10 @@ export function buildGraph(
         iframeHeight: iframeConfig.height,
         iframeScale: iframeConfig.scale,
         onHide,
+        isDynamic: s.isDynamic,
+        params: s.params,
+        paramValues: paramValues[s.id],
+        onParamChange,
       } satisfies ScreenNodeData,
     };
   });

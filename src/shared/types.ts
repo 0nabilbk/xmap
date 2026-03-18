@@ -57,6 +57,8 @@ export interface MapState {
   edges: XmapEdge[];
   workflows: XmapWorkflow[];
   hiddenScreens: string[];
+  /** Per-screen param values for dynamic routes, e.g. { "dashboard-clients-_clientId_": { "clientId": "abc123" } } */
+  paramValues: Record<string, Record<string, string>>;
   iframe: { width: number; height: number; scale: number };
   savedAt: string;
 }
