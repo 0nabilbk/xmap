@@ -1,0 +1,56 @@
+{
+  "name": "xmap",
+  "version": "0.1.0",
+  "description": "Visualize your web app's experience map on a ReactFlow canvas",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "xmap": "./dist/cli/index.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/shared/types.d.ts",
+      "import": "./dist/shared/index.js"
+    }
+  },
+  "files": [
+    "dist/"
+  ],
+  "scripts": {
+    "build": "pnpm build:cli && pnpm build:ui",
+    "build:cli": "tsup src/cli/index.ts --format esm --dts --outDir dist/cli --target node18 --clean",
+    "build:ui": "vite build",
+    "dev:cli": "tsup src/cli/index.ts --format esm --dts --outDir dist/cli --target node18 --watch",
+    "prepublishOnly": "pnpm build"
+  },
+  "dependencies": {
+    "cac": "^6.7.14",
+    "esbuild": "^0.20.2",
+    "picocolors": "^1.0.0",
+    "sirv": "^2.0.4",
+    "ws": "^8.16.0"
+  },
+  "devDependencies": {
+    "@xyflow/react": "^12.4.4",
+    "@types/node": "^20.11.0",
+    "@types/ws": "^8.5.10",
+    "@vitejs/plugin-react": "^4.2.1",
+    "framer-motion": "^11.0.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "tsup": "^8.0.1",
+    "typescript": "^5.3.3",
+    "vite": "^5.1.0"
+  },
+  "peerDependencies": {
+    "playwright-core": ">=1.40.0"
+  },
+  "peerDependenciesMeta": {
+    "playwright-core": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
